@@ -532,10 +532,13 @@ impl ElectrumClientFactory<BdkElectrumClient<Client>> for BdkElectrumClientFacto
         
         tracing::debug!("Electrum client routing through SOCKS5 at {}", socks_addr);
 
+        // Socks5Config oluşturuluyor (Adres ve yetkilendirme yoksa None)
+        let socks_config = electrum_client::Socks5Config::new(socks_addr, None);
+
         let client_config = ConfigBuilder::new()
             .timeout(Some(config.request_timeout))
             .retry(1)
-            .socks5(Some(socks_addr)) // <-- SOCKS5 Proxy
+            .socks5(Some(socks_config)) // Doğru tip: Option<Socks5Config> veya Socks5Config
             .build();
 
         let client = Client::from_config(url, client_config).map_err(|e| {
