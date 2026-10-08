@@ -5,7 +5,7 @@ authors = ["eigenwallet Team <help@unstoppableswap.net>"]
 edition = "2024"
 
 [dependencies]
-bdk_electrum = { workspace = true, features = ["use-rustls-ring"] }
+bdk_electrum = { workspace = true, features = ["use-rustls-ring", "proxy"] }
 bitcoin = { workspace = true }
 futures = { workspace = true }
 once_cell = { workspace = true }
