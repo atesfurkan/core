@@ -1,6 +1,6 @@
 {
   "productName": "eigenwallet",
-  "version": "4.15.0",
+  "version": "4.16.0",
   "identifier": "net.unstoppableswap.gui",
   "build": {
     "devUrl": "http://localhost:1420",
@@ -27,7 +27,7 @@
     }
   },
   "bundle": {
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "active": true,
     "targets": ["appimage", "dmg", "nsis", "app", "deb"],
     "icon": [
@@ -52,7 +52,7 @@
   },
   "plugins": {
     "updater": {
-      "active": true,
+      "active": false,
       "dialog": true,
       "endpoints": [
         "https://cdn.crabnebula.app/update/unstoppableswap/unstoppableswap-gui-rs/{{target}}-{{arch}}/{{current_version}}"

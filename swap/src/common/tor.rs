@@ -11,6 +11,69 @@ use tor_rtcompat::tokio::TokioRustlsRuntime;
 static TOR_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 static TOR_RESOLVE_TIMEOUT: Duration = Duration::from_secs(20);
 
+
+
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+/// Minimal SOCKS5 bridge that routes traffic through the embedded Arti Tor client
+pub async fn spawn_socks5_bridge(tor_client: Arc<TorClient<TokioRustlsRuntime>>, port: u16) {
+    let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!("Failed to bind local SOCKS5 bridge on port {}: {}", port, e);
+            return;
+        }
+    };
+    tracing::info!("Local SOCKS5 bridge is listening on 127.0.0.1:{} for Electrum", port);
+
+    while let Ok((mut stream, _)) = listener.accept().await {
+        let tor_client = tor_client.clone();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 256];
+            // 1. SOCKS5 greeting
+            if stream.read_exact(&mut buf[0..2]).await.is_err() || buf[0] != 0x05 { return; }
+            let n_methods = buf[1] as usize;
+            if stream.read_exact(&mut buf[0..n_methods]).await.is_err() { return; }
+            // 2. Reply: No auth required
+            if stream.write_all(&[0x05, 0x00]).await.is_err() { return; }
+            // 3. Read request
+            if stream.read_exact(&mut buf[0..4]).await.is_err() { return; }
+            if buf[0] != 0x05 || buf[1] != 0x01 { return; } // SOCKS5, CONNECT
+            
+            let dst_addr = match buf[3] {
+                0x01 => { // IPv4
+                    if stream.read_exact(&mut buf[0..4]).await.is_err() { return; }
+                    std::net::Ipv4Addr::new(buf[0], buf[1], buf[2], buf[3]).to_string()
+                }
+                0x03 => { // Domain
+                    if stream.read_exact(&mut buf[0..1]).await.is_err() { return; }
+                    let len = buf[0] as usize;
+                    if stream.read_exact(&mut buf[0..len]).await.is_err() { return; }
+                    String::from_utf8_lossy(&buf[0..len]).to_string()
+                }
+                _ => return, // Only IPv4 and Domain supported for simplicity
+            };
+
+            if stream.read_exact(&mut buf[0..2]).await.is_err() { return; }
+            let dst_port = u16::from_be_bytes([buf[0], buf[1]]);
+
+            // 4. Connect via Arti Tor Client
+            match tor_client.connect((dst_addr.as_str(), dst_port)).await {
+                Ok(mut tor_stream) => {
+                    // Reply success
+                    if stream.write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await.is_err() { return; }
+                    let _ = tokio::io::copy_bidirectional(&mut stream, &mut tor_stream).await;
+                }
+                Err(_) => {
+                    // Reply host unreachable
+                    let _ = stream.write_all(&[0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await;
+                }
+            }
+        });
+    }
+}
+
+
 /// Creates an unbootstrapped Tor client
 pub async fn create_tor_client(
     data_dir: &Path,
@@ -101,6 +164,13 @@ pub async fn bootstrap_tor_client(
             res
         },
     }?;
+
+    // Start the local SOCKS5 bridge once Tor is successfully bootstrapped
+    let tor_client_for_socks = tor_client.clone();
+    tokio::spawn(async move {
+        spawn_socks5_bridge(tor_client_for_socks, 9150).await;
+    });
+    // ------------------------
 
     Ok(())
 }
