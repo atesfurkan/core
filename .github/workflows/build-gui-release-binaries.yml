@@ -225,4 +225,71 @@ jobs:
           args: --target ${{ matrix.target }}
 
   generate-homebrew-formula:
-    # don't do it for developer testing
+    # don't do it for developer testing releases
+    if: ${{ !startsWith(github.ref_name, 'test-') }}
+    needs: [build_gui]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download DMG files and generate formula
+        env:
+          GITHUB_TOKEN: ${{ secrets.BOTTY_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ github.event.release.tag_name }}"
+
+          echo "Creating download directory /tmp/dmgs ..."
+          mkdir -p /tmp/dmgs
+
+          echo "Downloading all *.dmg assets from release $VERSION ..."
+          gh release download "$VERSION" --pattern "*.dmg" --dir /tmp/dmgs
+
+          echo "Download complete. Contents of /tmp/dmgs:"
+          ls -la /tmp/dmgs
+          
+          # Calculate SHA256 checksums
+          AARCH64_DMG=$(ls /tmp/dmgs/eigenwallet_*_aarch64.dmg)
+          X64_DMG=$(ls /tmp/dmgs/eigenwallet_*_x64.dmg)
+
+          echo "Found DMGs:"
+          echo "  aarch64 -> $(basename "$AARCH64_DMG")"
+          echo "  x64     -> $(basename "$X64_DMG")"
+
+          AARCH64_SHA256=$(sha256sum "$AARCH64_DMG" | awk '{print $1}')
+          X64_SHA256=$(sha256sum "$X64_DMG" | awk '{print $1}')
+
+          echo "aarch64 SHA256: $AARCH64_SHA256"
+          echo "x64 SHA256: $X64_SHA256"
+
+          # Generate the Homebrew formula from template
+          sed -e "s/VERSION_PLACEHOLDER/$VERSION/g"               \
+              -e "s/AARCH64_SHA256_PLACEHOLDER/$AARCH64_SHA256/g" \
+              -e "s/X64_SHA256_PLACEHOLDER/$X64_SHA256/g"         \
+              dev-scripts/homebrew/eigenwallet.rb.template | tee eigenwallet.rb
+
+      - name: Upload Homebrew formula to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.BOTTY_GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            eigenwallet.rb \
+            --clobber
+
+  publish:
+    # don't publish previews or developer testing releases to crabnebula
+    if: ${{ github.event_name != 'pull_request' && !contains(github.ref_name, 'preview') && !startsWith(github.ref_name, 'test-') }}
+    needs: [draft-cb-release, build_gui]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set env variables
+        uses: ./.github/actions/set-monero-env
+
+      - name: Publish Release
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release publish ${{ env.CN_APPLICATION }} --framework tauri
+          api-key: ${{ secrets.CN_API_KEY }}
